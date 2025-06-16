@@ -27,7 +27,7 @@ SIMILARITY_THRESHOLD = 0.50  # Lowered threshold for better recall
 MAX_RESULTS = 10  # Increased to get more context
 load_dotenv()
 MAX_CONTEXT_CHUNKS = 4  # Increased number of chunks per source
-API_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6IjIzZjIwMDM5NzZAZHMuc3R1ZHkuaWl0bS5hYy5pbiJ9.Cp0nvbCTySMjljvdkFa_yV53Ohk7nPgCklo82TzbtYM"  # Get API key from environment variable
+API_KEY = os.environ['API_TOKEN']
 
 # Models
 class QueryRequest(BaseModel):
