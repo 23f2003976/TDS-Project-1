@@ -4,7 +4,8 @@ import json
 import sqlite3
 import numpy as np
 import re
-from fastapi import FastAPI, HTTPException, File, UploadFile, Form, Body
+from fastapi import FastAPI, HTTPException, File, UploadFile, Form, Body, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -16,6 +17,7 @@ from fastapi.responses import JSONResponse
 import uvicorn
 import traceback
 from dotenv import load_dotenv
+from pydantic import ValidationError
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -27,7 +29,7 @@ SIMILARITY_THRESHOLD = 0.50  # Lowered threshold for better recall
 MAX_RESULTS = 10  # Increased to get more context
 load_dotenv()
 MAX_CONTEXT_CHUNKS = 4  # Increased number of chunks per source
-API_KEY = os.environ['API_KEY']
+API_KEY = os.environ["API_KEY"]
 
 # Models
 class QueryRequest(BaseModel):
@@ -60,10 +62,10 @@ if not API_KEY:
 
 # Create a connection to the SQLite database
 def get_db_connection():
-    conn = None
+    """Establishes a connection to the SQLite database with named column access."""
     try:
         conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row  # This enables column access by name
+        conn.row_factory = sqlite3.Row
         return conn
     except sqlite3.Error as e:
         error_msg = f"Database connection error: {str(e)}"
@@ -596,93 +598,91 @@ def parse_llm_response(response):
         }
 
 # Define API routes
+
 @app.post("/query")
-async def query_knowledge_base(request: QueryRequest):
+async def query_knowledge_base(request: Request):
     try:
-        # Log the incoming request
-        print(f"Received query request: question='{request.question[:50]}...', image_provided={request.image is not None}")
-        
+        # Step 1: Try parsing using FastAPI's automatic JSON parsing
+        try:
+            body = await request.json()
+            request_data = QueryRequest(**body)
+        except (ValidationError, json.JSONDecodeError, TypeError):
+            # Step 2: Handle case where body is a stringified JSON string
+            raw_body = await request.body()
+            try:
+                body_str = raw_body.decode('utf-8')
+                body = json.loads(body_str)
+                request_data = QueryRequest(**body)
+            except Exception as e:
+                error_msg = f"Invalid request body: {e}"
+                logger.error(error_msg)
+                return JSONResponse(status_code=400, content={"error": error_msg})
+
+        question = request_data.question
+        image = request_data.image
+
+        print(f"Received query request: question='{question[:50]}...', image_provided={image is not None}")
+
         if not API_KEY:
             error_msg = "API_KEY environment variable not set"
             logger.error(error_msg)
-            return JSONResponse(
-                status_code=500,
-                content={"error": error_msg}
-            )
-            
+            return JSONResponse(status_code=500, content={"error": error_msg})
+
         conn = get_db_connection()
-        
+
         try:
-            # Process the query (handle text and optional image)
+            # Process the query
             print("Processing query and generating embedding")
-            query_embedding = await process_multimodal_query(
-                request.question,
-                request.image
-            )
-            
-            # Find similar content
+            query_embedding = await process_multimodal_query(question, image)
+
             print("Finding similar content")
             relevant_results = await find_similar_content(query_embedding, conn)
-            
+
             if not relevant_results:
                 print("No relevant results found")
                 return {
                     "answer": "I couldn't find any relevant information in my knowledge base.",
                     "links": []
                 }
-            
-            # Enrich results with adjacent chunks for better context
+
             print("Enriching results with adjacent chunks")
             enriched_results = await enrich_with_adjacent_chunks(conn, relevant_results)
-            
-            # Generate answer
+
             print("Generating answer")
-            llm_response = await generate_answer(request.question, enriched_results)
-            
-            # Parse the response
+            llm_response = await generate_answer(question, enriched_results)
+
             print("Parsing LLM response")
             result = parse_llm_response(llm_response)
-            
-            # If links extraction failed, create them from the relevant results
+
             if not result["links"]:
                 print("No links extracted, creating from relevant results")
-                # Create a dict to deduplicate links from the same source
                 links = []
                 unique_urls = set()
-                
-                for res in relevant_results[:5]:  # Use top 5 results
+                for res in relevant_results[:5]:
                     url = res["url"]
                     if url not in unique_urls:
                         unique_urls.add(url)
                         snippet = res["content"][:100] + "..." if len(res["content"]) > 100 else res["content"]
                         links.append({"url": url, "text": snippet})
-                
                 result["links"] = links
-            
-            # Log the final result structure (without full content for brevity)
+
             print(f"Returning result: answer_length={len(result['answer'])}, num_links={len(result['links'])}")
-            
-            # Return the response in the exact format required
             return result
+
         except Exception as e:
             error_msg = f"Error processing query: {e}"
             logger.error(error_msg)
             logger.error(traceback.format_exc())
-            return JSONResponse(
-                status_code=500,
-                content={"error": error_msg}
-            )
+            return JSONResponse(status_code=500, content={"error": error_msg})
         finally:
             conn.close()
+
     except Exception as e:
-        # Catch any exceptions at the top level
         error_msg = f"Unhandled exception in query_knowledge_base: {e}"
         logger.error(error_msg)
         logger.error(traceback.format_exc())
-        return JSONResponse(
-            status_code=500,
-            content={"error": error_msg}
-        )
+        return JSONResponse(status_code=500, content={"error": error_msg})
+
 
 # Health check endpoint
 @app.get("/health")
