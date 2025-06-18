@@ -602,21 +602,39 @@ def parse_llm_response(response):
 @app.post("/query")
 async def query_knowledge_base(request: Request):
     try:
-        # Step 1: Try parsing using FastAPI's automatic JSON parsing
+        raw_body = await request.body()
         try:
-            body = await request.json()
-            request_data = QueryRequest(**body)
-        except (ValidationError, json.JSONDecodeError, TypeError):
-            # Step 2: Handle case where body is a stringified JSON string
-            raw_body = await request.body()
+            # Try to decode raw bytes as UTF-8 string
+            body_str = raw_body.decode("utf-8")
+        except Exception as e:
+            return JSONResponse(status_code=400, content={"error": f"Unable to decode request body: {e}"})
+
+        # Now try to parse JSON:
+        try:
+            parsed_json = json.loads(body_str)
+        except json.JSONDecodeError as e:
+            # If it's already a stringified JSON string, try one more decode:
             try:
-                body_str = raw_body.decode('utf-8')
-                body = json.loads(body_str)
-                request_data = QueryRequest(**body)
+                # parse once more if it's a JSON string inside a string, e.g. "\"{...}\""
+                parsed_json = json.loads(json.loads(body_str))
+            except Exception:
+                return JSONResponse(status_code=400, content={"error": f"Invalid JSON body: {e}"})
+
+        # Now parsed_json can be:
+        # 1. dict (ideal)
+        # 2. string (bad client sent JSON string instead of object)
+        if isinstance(parsed_json, str):
+            # Try to parse again, in case of double-encoded JSON string
+            try:
+                parsed_json = json.loads(parsed_json)
             except Exception as e:
-                error_msg = f"Invalid request body: {e}"
-                logger.error(error_msg)
-                return JSONResponse(status_code=400, content={"error": error_msg})
+                return JSONResponse(status_code=400, content={"error": f"Invalid JSON string body: {e}"})
+
+        # Validate with Pydantic
+        try:
+            request_data = QueryRequest(**parsed_json)
+        except ValidationError as e:
+            return JSONResponse(status_code=422, content={"error": e.errors()})
 
         question = request_data.question
         image = request_data.image
@@ -666,7 +684,7 @@ async def query_knowledge_base(request: Request):
                         links.append({"url": url, "text": snippet})
                 result["links"] = links
 
-            print(f"Returning result: answer_length={len(result['answer'])}, num_links={len(result['links'])}")
+            print(f"Returning result: {result}")
             return result
 
         except Exception as e:
