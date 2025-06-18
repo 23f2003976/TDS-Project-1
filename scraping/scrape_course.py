@@ -6,13 +6,9 @@ from urllib.parse import urljoin
 from markdownify import markdownify as md
 from playwright.sync_api import sync_playwright
 
-# === CONFIG ===
 BASE_URL = "https://tds.s-anand.net/#/"
 BASE_ORIGIN = "https://tds.s-anand.net"
-
-# Save to project/markdown_files/
 OUTPUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "markdown_files"))
-
 METADATA_FILE = os.path.join(OUTPUT_DIR, "metadata.json")
 
 visited = set()
@@ -37,13 +33,13 @@ def crawl_page(page, url):
         return
     visited.add(url)
 
-    print(f"📄 Visiting: {url}")
+    print(f"Visiting: {url}")
     try:
         page.goto(url, wait_until="domcontentloaded")
         page.wait_for_timeout(1000)
         html = wait_for_article_and_get_html(page)
     except Exception as e:
-        print(f"❌ Error loading page: {url} — {e}")
+        print(f"Error loading page: {url} — {e}")
         return
 
     title = page.title().split(" - ")[0].strip() or f"page_{len(visited)}"
@@ -85,7 +81,7 @@ def main():
         with open(METADATA_FILE, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
 
-        print(f"✅ Completed. {len(metadata)} pages saved.")
+        print(f"Completed. {len(metadata)} pages saved.")
         browser.close()
 
 if __name__ == "__main__":
